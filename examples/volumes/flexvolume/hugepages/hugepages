@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import subprocess
+import sys
+
+
+def get_volume_name():
+    device_path = "hugepages"
+    return generate_output("Success",
+                           "Creating name was successful",
+                           volumeName=device_path)
+
+
+def mount_device(mount_dir):
+    mount_hugepages(mount_dir)
+    return generate_output("Success",
+                           "Dev {} has been mounted".format(mount_dir))
+
+
+def unmount(mount_dir):
+    if not os.path.ismount(mount_dir):
+        return generate_output("Failure",
+                               "Dir {} is not mounted".format(mount_dir))
+
+    umount_device(mount_dir)
+    return generate_output("Success",
+                           "{} has been unmounted".format(mount_dir))
+
+
+def umount_device(device_path):
+    subprocess.check_call(["umount", device_path])
+
+
+def mount_hugepages(device_path):
+    os.makedirs(device_path, exist_ok=True)
+    subprocess.check_call(["mount", "-t", "hugetlbfs", "nodev", device_path])
+
+
+def generate_output(status, message, device=None,
+                    volumeName=None, attached=None):
+
+    output = {"status": status, "message": message}
+    if device:
+        output["device"] = device
+    if volumeName:
+        output["volumeName"] = volumeName
+    if attached:
+        output["attached"] = attached
+
+    return output
+
+if __name__ == "__main__":
+    try:
+        operation = sys.argv[1]
+        if operation == "getvolumename":
+            json_output = get_volume_name()
+            json.dump(json_output, sys.stdout)
+        elif operation == "init":
+            json_output = generate_output("Success",
+                                          "Binary works")
+            json.dump(json_output, sys.stdout)
+        elif operation == "mount":
+            mount_dir = sys.argv[2]
+            json_output = mount_device(mount_dir)
+            json.dump(json_output, sys.stdout)
+        elif operation == "unmount":
+            mount_dir = sys.argv[2]
+            json_output = unmount(mount_dir)
+            json.dump(json_output, sys.stdout)
+        else:
+            json_output = generate_output("Not supported",
+                                          "{} not supported".format(operation))
+            json.dump(json_output, sys.stdout)
+    except Exception as e:
+        json.dump(generate_output("Failure", repr(e)), sys.stdout)
