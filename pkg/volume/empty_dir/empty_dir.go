@@ -20,13 +20,13 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"strings"
 
 	"github.com/golang/glog"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	v1helper "k8s.io/kubernetes/pkg/api/v1/helper"
 	"k8s.io/kubernetes/pkg/util/mount"
 	stringsutil "k8s.io/kubernetes/pkg/util/strings"
 	"k8s.io/kubernetes/pkg/volume"
@@ -306,8 +306,8 @@ func getPageSizeMountOptionFromPod(pod *v1.Pod) (string, error) {
 	for _, container := range containers {
 		// We can take request because limit and requests must match.
 		for requestName := range container.Resources.Requests {
-			if isHugePageResourceName(requestName) {
-				currentPageSize, err := hugePageSizeFromResourceName(requestName)
+			if v1helper.IsHugePageResourceName(requestName) {
+				currentPageSize, err := v1helper.HugePageSizeFromResourceName(requestName)
 				if err != nil {
 					return "", err
 				}
@@ -440,22 +440,4 @@ func getVolumeSource(spec *volume.Spec) (*v1.EmptyDirVolumeSource, bool) {
 	}
 
 	return volumeSource, readOnly
-}
-
-// TODO: reuse those functions from "pkg/api/v1/helper/helpers.go" when PR #50859 will get merged
-// IsHugePageResourceName returns true if the resource name has the huge page
-// resource prefix.
-func isHugePageResourceName(name v1.ResourceName) bool {
-	return strings.HasPrefix(string(name), resourceHugePagesPrefix)
-}
-
-// HugePageSizeFromResourceName returns the page size for the specified huge page
-// resource name.  If the specified input is not a valid huge page resource name
-// an error is returned.
-func hugePageSizeFromResourceName(name v1.ResourceName) (resource.Quantity, error) {
-	if !isHugePageResourceName(name) {
-		return resource.Quantity{}, fmt.Errorf("resource name: %s is not valid hugepage name", name)
-	}
-	pageSize := strings.TrimPrefix(string(name), resourceHugePagesPrefix)
-	return resource.ParseQuantity(pageSize)
 }
