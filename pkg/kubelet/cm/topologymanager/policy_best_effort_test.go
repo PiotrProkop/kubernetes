@@ -39,8 +39,9 @@ func TestPolicyBestEffortCanAdmitPodResult(t *testing.T) {
 	}
 
 	for _, tc := range tcases {
-		numaNodes := []int{0, 1}
-		policy := NewBestEffortPolicy(numaNodes)
+		topo := commonNUMATopologyTwoNodes()
+		opts := TopologyManagerOptions{}
+		policy := NewBestEffortPolicy(topo, opts)
 		result := policy.(*bestEffortPolicy).canAdmitPodResult(&tc.hint)
 
 		if result != tc.expected {
@@ -50,11 +51,25 @@ func TestPolicyBestEffortCanAdmitPodResult(t *testing.T) {
 }
 
 func TestPolicyBestEffortMerge(t *testing.T) {
-	numaNodes := []int{0, 1, 2, 3}
-	policy := NewBestEffortPolicy(numaNodes)
+	topo := commonNUMATopologyFourNodes()
+	opts := TopologyManagerOptions{}
+	policy := NewBestEffortPolicy(topo, opts)
 
-	tcases := commonPolicyMergeTestCases(numaNodes)
-	tcases = append(tcases, policy.(*bestEffortPolicy).mergeTestCases(numaNodes)...)
+	tcases := commonPolicyMergeTestCases(topo.GetNumaNodes())
+	tcases = append(tcases, policy.(*bestEffortPolicy).mergeTestCases(topo.GetNumaNodes())...)
+	tcases = append(tcases, policy.(*bestEffortPolicy).mergeTestCasesNoPolicies(topo.GetNumaNodes())...)
+
+	testPolicyMerge(policy, tcases, t)
+}
+
+func TestPolicyBestEffortMergeClosestNUMA(t *testing.T) {
+	topo := commonNUMATopologyEightNodes()
+	opts := TopologyManagerOptions{PreferClosestNUMA: true}
+	policy := NewBestEffortPolicy(topo, opts)
+
+	tcases := commonPolicyMergeTestCases(topo.GetNumaNodes())
+	tcases = append(tcases, policy.(*bestEffortPolicy).mergeTestCases(topo.GetNumaNodes())...)
+	tcases = append(tcases, policy.(*bestEffortPolicy).mergeTestCasesClosestNUMA(topo.GetNumaNodes())...)
 
 	testPolicyMerge(policy, tcases, t)
 }

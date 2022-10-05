@@ -55,6 +55,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/memorymanager"
 	memorymanagerstate "k8s.io/kubernetes/pkg/kubelet/cm/memorymanager/state"
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager"
+	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/numatopology"
 	cmutil "k8s.io/kubernetes/pkg/kubelet/cm/util"
 	"k8s.io/kubernetes/pkg/kubelet/config"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
@@ -286,8 +287,10 @@ func NewContainerManager(mountUtil mount.Interface, cadvisorInterface cadvisor.I
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.TopologyManager) {
 		cm.topologyManager, err = topologymanager.NewManager(
 			machineInfo.Topology,
+			numatopology.NewRealSysFs(),
 			nodeConfig.ExperimentalTopologyManagerPolicy,
 			nodeConfig.ExperimentalTopologyManagerScope,
+			nodeConfig.ExperimentalTopologyManagerPolicyOptions,
 		)
 
 		if err != nil {

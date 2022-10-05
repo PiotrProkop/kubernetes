@@ -20,9 +20,10 @@ import (
 	"fmt"
 
 	cadvisorapi "github.com/google/cadvisor/info/v1"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/bitmask"
+	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/numatopology"
 	"k8s.io/kubernetes/pkg/kubelet/lifecycle"
 )
 
@@ -130,15 +131,15 @@ func (th *TopologyHint) LessThan(other TopologyHint) bool {
 var _ Manager = &manager{}
 
 // NewManager creates a new TopologyManager based on provided policy and scope
-func NewManager(topology []cadvisorapi.Node, topologyPolicyName string, topologyScopeName string) (Manager, error) {
+func NewManager(topology []cadvisorapi.Node, sysFs numatopology.SysFs, topologyPolicyName string, topologyScopeName string, topologyPolicyOptions map[string]string) (Manager, error) {
 	klog.InfoS("Creating topology manager with policy per scope", "topologyPolicyName", topologyPolicyName, "topologyScopeName", topologyScopeName)
 
-	var numaNodes []int
-	for _, node := range topology {
-		numaNodes = append(numaNodes, node.Id)
+	numaTopology, err := numatopology.New(topology, sysFs)
+	if err != nil {
+		return nil, fmt.Errorf("cannot discover NUMA topology: %w", err)
 	}
 
-	if topologyPolicyName != PolicyNone && len(numaNodes) > maxAllowableNUMANodes {
+	if topologyPolicyName != PolicyNone && numaTopology.NumaNodesCount() > maxAllowableNUMANodes {
 		return nil, fmt.Errorf("unsupported on machines with more than %v NUMA Nodes", maxAllowableNUMANodes)
 	}
 
@@ -149,13 +150,21 @@ func NewManager(topology []cadvisorapi.Node, topologyPolicyName string, topology
 		policy = NewNonePolicy()
 
 	case PolicyBestEffort:
-		policy = NewBestEffortPolicy(numaNodes)
+		opts, err := NewTopologyManagerOptions(topologyPolicyOptions)
+		if err != nil {
+			return nil, err
+		}
+		policy = NewBestEffortPolicy(numaTopology, opts)
 
 	case PolicyRestricted:
-		policy = NewRestrictedPolicy(numaNodes)
+		opts, err := NewTopologyManagerOptions(topologyPolicyOptions)
+		if err != nil {
+			return nil, err
+		}
+		policy = NewRestrictedPolicy(numaTopology, opts)
 
 	case PolicySingleNumaNode:
-		policy = NewSingleNumaNodePolicy(numaNodes)
+		policy = NewSingleNumaNodePolicy(numaTopology)
 
 	default:
 		return nil, fmt.Errorf("unknown policy: \"%s\"", topologyPolicyName)

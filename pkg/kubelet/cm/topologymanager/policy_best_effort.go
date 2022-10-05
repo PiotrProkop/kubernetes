@@ -16,9 +16,15 @@ limitations under the License.
 
 package topologymanager
 
+import (
+	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/bitmask"
+	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/numatopology"
+)
+
 type bestEffortPolicy struct {
 	//List of NUMA Nodes available on the underlying machine
-	numaNodes []int
+	numaTopology numatopology.Topology
+	opts         TopologyManagerOptions
 }
 
 var _ Policy = &bestEffortPolicy{}
@@ -27,8 +33,8 @@ var _ Policy = &bestEffortPolicy{}
 const PolicyBestEffort string = "best-effort"
 
 // NewBestEffortPolicy returns best-effort policy.
-func NewBestEffortPolicy(numaNodes []int) Policy {
-	return &bestEffortPolicy{numaNodes: numaNodes}
+func NewBestEffortPolicy(numaTopology numatopology.Topology, opts TopologyManagerOptions) Policy {
+	return &bestEffortPolicy{numaTopology: numaTopology, opts: opts}
 }
 
 func (p *bestEffortPolicy) Name() string {
@@ -39,9 +45,31 @@ func (p *bestEffortPolicy) canAdmitPodResult(hint *TopologyHint) bool {
 	return true
 }
 
+func (p *bestEffortPolicy) preferClosestNUMAFunc(candidate *TopologyHint, current *TopologyHint) bool {
+	if candidate.NUMANodeAffinity.Count() == current.NUMANodeAffinity.Count() {
+		candidateDistance := p.numaTopology.CalculateAvgDistanceFor(candidate.NUMANodeAffinity)
+		currentDistance := p.numaTopology.CalculateAvgDistanceFor(current.NUMANodeAffinity)
+		// if average distance is the same take bitmask with more lower-number bits set
+		if candidateDistance == currentDistance {
+			return candidate.NUMANodeAffinity.IsLowerValueThan(current.NUMANodeAffinity)
+		}
+		// candidate avg distance is lower
+		return candidateDistance < currentDistance
+	}
+
+	return candidate.NUMANodeAffinity.IsNarrowerThan(current.NUMANodeAffinity)
+}
+
 func (p *bestEffortPolicy) Merge(providersHints []map[string][]TopologyHint) (TopologyHint, bool) {
+	var fitnessFunc fitterHintFunc
+
+	if p.opts.PreferClosestNUMA {
+		fitnessFunc = p.preferClosestNUMAFunc
+	}
+
 	filteredProvidersHints := filterProvidersHints(providersHints)
-	bestHint := mergeFilteredHints(p.numaNodes, filteredProvidersHints)
+	defaultAffinity, _ := bitmask.NewBitMask(p.numaTopology.GetNumaNodes()...)
+	bestHint := mergeFilteredHints(defaultAffinity, filteredProvidersHints, fitnessFunc)
 	admit := p.canAdmitPodResult(&bestHint)
 	return bestHint, admit
 }

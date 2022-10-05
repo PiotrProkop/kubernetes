@@ -16,6 +16,11 @@ limitations under the License.
 
 package topologymanager
 
+import (
+	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/bitmask"
+	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/numatopology"
+)
+
 type restrictedPolicy struct {
 	bestEffortPolicy
 }
@@ -26,8 +31,8 @@ var _ Policy = &restrictedPolicy{}
 const PolicyRestricted string = "restricted"
 
 // NewRestrictedPolicy returns restricted policy.
-func NewRestrictedPolicy(numaNodes []int) Policy {
-	return &restrictedPolicy{bestEffortPolicy{numaNodes: numaNodes}}
+func NewRestrictedPolicy(numaTopology numatopology.Topology, opts TopologyManagerOptions) Policy {
+	return &restrictedPolicy{bestEffortPolicy{numaTopology: numaTopology, opts: opts}}
 }
 
 func (p *restrictedPolicy) Name() string {
@@ -39,8 +44,15 @@ func (p *restrictedPolicy) canAdmitPodResult(hint *TopologyHint) bool {
 }
 
 func (p *restrictedPolicy) Merge(providersHints []map[string][]TopologyHint) (TopologyHint, bool) {
+	var fitnessFunc fitterHintFunc
+
+	if p.opts.PreferClosestNUMA {
+		fitnessFunc = p.preferClosestNUMAFunc
+	}
+
 	filteredHints := filterProvidersHints(providersHints)
-	hint := mergeFilteredHints(p.numaNodes, filteredHints)
+	defaultAffinity, _ := bitmask.NewBitMask(p.numaTopology.GetNumaNodes()...)
+	hint := mergeFilteredHints(defaultAffinity, filteredHints, fitnessFunc)
 	admit := p.canAdmitPodResult(&hint)
 	return hint, admit
 }

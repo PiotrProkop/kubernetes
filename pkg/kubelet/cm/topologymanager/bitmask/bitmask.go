@@ -35,6 +35,7 @@ type BitMask interface {
 	IsSet(bit int) bool
 	AnySet(bits []int) bool
 	IsNarrowerThan(mask BitMask) bool
+	IsLowerValueThan(mask BitMask) bool
 	String() string
 	Count() int
 	GetBits() []int
@@ -143,11 +144,14 @@ func (s *bitMask) IsEqual(mask BitMask) bool {
 // lower-numbered bits set wins out.
 func (s *bitMask) IsNarrowerThan(mask BitMask) bool {
 	if s.Count() == mask.Count() {
-		if *s < *mask.(*bitMask) {
-			return true
-		}
+		return s.IsLowerValueThan(mask)
 	}
 	return s.Count() < mask.Count()
+}
+
+// IsLowerValueThan checks which bitmask has more lower-numbered bits set.
+func (s *bitMask) IsLowerValueThan(mask BitMask) bool {
+	return *s < *mask.(*bitMask)
 }
 
 // String converts mask to string

@@ -21,6 +21,9 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/bitmask"
 )
 
+// fitterHintFunc is a functions that checks if candidate hint is fitter than current hint
+type fitterHintFunc func(candidate *TopologyHint, current *TopologyHint) bool
+
 // Policy interface for Topology Manager Pod Admit Result
 type Policy interface {
 	// Returns Policy Name
@@ -33,11 +36,10 @@ type Policy interface {
 // Merge a TopologyHints permutation to a single hint by performing a bitwise-AND
 // of their affinity masks. The hint shall be preferred if all hits in the permutation
 // are preferred.
-func mergePermutation(numaNodes []int, permutation []TopologyHint) TopologyHint {
+func mergePermutation(defaultAffinity bitmask.BitMask, permutation []TopologyHint) TopologyHint {
 	// Get the NUMANodeAffinity from each hint in the permutation and see if any
 	// of them encode unpreferred allocations.
 	preferred := true
-	defaultAffinity, _ := bitmask.NewBitMask(numaNodes...)
 	var numaAffinities []bitmask.BitMask
 	for _, hint := range permutation {
 		// Only consider hints that have an actual NUMANodeAffinity set.
@@ -127,7 +129,12 @@ func maxOfMinAffinityCounts(filteredHints [][]TopologyHint) int {
 	return maxOfMinCount
 }
 
-func compareHints(bestNonPreferredAffinityCount int, current *TopologyHint, candidate *TopologyHint) *TopologyHint {
+func compareHints(bestNonPreferredAffinityCount int, current *TopologyHint, candidate *TopologyHint, isCandidateFitter fitterHintFunc) *TopologyHint {
+	// default isCandidateHintFitter to take narrower bitmask
+	if isCandidateFitter == nil {
+		isCandidateFitter = defaultIsCandidateFitterFunc
+	}
+
 	// Only consider candidates that result in a NUMANodeAffinity > 0 to
 	// replace the current bestHint.
 	if candidate.NUMANodeAffinity.Count() == 0 {
@@ -147,16 +154,15 @@ func compareHints(bestNonPreferredAffinityCount int, current *TopologyHint, cand
 
 	// If the current bestHint is preferred and the candidate hint is
 	// non-preferred, never update the bestHint, regardless of the
-	// candidate hint's narowness.
+	// candidate hint's fitness.
 	if current.Preferred && !candidate.Preferred {
 		return current
 	}
 
 	// If the current bestHint and the candidate hint are both preferred,
-	// then only consider candidate hints that have a narrower
-	// NUMANodeAffinity than the NUMANodeAffinity in the current bestHint.
+	// then only consider fitter Hint
 	if current.Preferred && candidate.Preferred {
-		if candidate.NUMANodeAffinity.IsNarrowerThan(current.NUMANodeAffinity) {
+		if isCandidateFitter(candidate, current) {
 			return candidate
 		}
 		return current
@@ -173,13 +179,13 @@ func compareHints(bestNonPreferredAffinityCount int, current *TopologyHint, cand
 	//   3. current.NUMANodeAffinity.Count() <  bestNonPreferredAffinityCount
 	//
 	// For case (1), the current bestHint is larger than the
-	// bestNonPreferredAffinityCount, so updating to any narrower mergeHint
+	// bestNonPreferredAffinityCount, so updating to fitter mergeHint
 	// is preferred over staying where we are.
 	//
 	// For case (2), the current bestHint is equal to the
 	// bestNonPreferredAffinityCount, so we would like to stick with what
 	// we have *unless* the candidate hint is also equal to
-	// bestNonPreferredAffinityCount and it is narrower.
+	// bestNonPreferredAffinityCount and it is fitter.
 	//
 	// For case (3), the current bestHint is less than
 	// bestNonPreferredAffinityCount, so we would like to creep back up to
@@ -216,11 +222,11 @@ func compareHints(bestNonPreferredAffinityCount int, current *TopologyHint, cand
 	// the bestNonPreferredAffinityCount.
 	//
 	// Finally, for case (3cc), we know that the current bestHint and the
-	// candidate hint are equal, so we simply choose the narrower of the 2.
+	// candidate hint are equal, so we simply choose the fitter of the 2.
 
 	// Case 1
 	if current.NUMANodeAffinity.Count() > bestNonPreferredAffinityCount {
-		if candidate.NUMANodeAffinity.IsNarrowerThan(current.NUMANodeAffinity) {
+		if isCandidateFitter(candidate, current) {
 			return candidate
 		}
 		return current
@@ -230,7 +236,7 @@ func compareHints(bestNonPreferredAffinityCount int, current *TopologyHint, cand
 		if candidate.NUMANodeAffinity.Count() != bestNonPreferredAffinityCount {
 			return current
 		}
-		if candidate.NUMANodeAffinity.IsNarrowerThan(current.NUMANodeAffinity) {
+		if isCandidateFitter(candidate, current) {
 			return candidate
 		}
 		return current
@@ -243,6 +249,7 @@ func compareHints(bestNonPreferredAffinityCount int, current *TopologyHint, cand
 	if candidate.NUMANodeAffinity.Count() == bestNonPreferredAffinityCount {
 		return candidate
 	}
+
 	// Case 3ca
 	if candidate.NUMANodeAffinity.Count() > current.NUMANodeAffinity.Count() {
 		return candidate
@@ -251,14 +258,20 @@ func compareHints(bestNonPreferredAffinityCount int, current *TopologyHint, cand
 	if candidate.NUMANodeAffinity.Count() < current.NUMANodeAffinity.Count() {
 		return current
 	}
+
 	// Case 3cc
-	if candidate.NUMANodeAffinity.IsNarrowerThan(current.NUMANodeAffinity) {
+	if isCandidateFitter(candidate, current) {
 		return candidate
 	}
+
 	return current
 }
 
-func mergeFilteredHints(numaNodes []int, filteredHints [][]TopologyHint) TopologyHint {
+func defaultIsCandidateFitterFunc(candidate *TopologyHint, current *TopologyHint) bool {
+	return candidate.NUMANodeAffinity.IsNarrowerThan(current.NUMANodeAffinity)
+}
+
+func mergeFilteredHints(defaultAffinity bitmask.BitMask, filteredHints [][]TopologyHint, fitnessFunc fitterHintFunc) TopologyHint {
 	// Set bestNonPreferredAffinityCount to help decide which affinity mask is
 	// preferred amongst all non-preferred hints. We calculate this value as
 	// the maximum of the minimum affinity counts supplied for any given hint
@@ -271,15 +284,14 @@ func mergeFilteredHints(numaNodes []int, filteredHints [][]TopologyHint) Topolog
 	iterateAllProviderTopologyHints(filteredHints, func(permutation []TopologyHint) {
 		// Get the NUMANodeAffinity from each hint in the permutation and see if any
 		// of them encode unpreferred allocations.
-		mergedHint := mergePermutation(numaNodes, permutation)
+		mergedHint := mergePermutation(defaultAffinity, permutation)
 
 		// Compare the current bestHint with the candidate mergedHint and
 		// update bestHint if appropriate.
-		bestHint = compareHints(bestNonPreferredAffinityCount, bestHint, &mergedHint)
+		bestHint = compareHints(bestNonPreferredAffinityCount, bestHint, &mergedHint, fitnessFunc)
 	})
 
 	if bestHint == nil {
-		defaultAffinity, _ := bitmask.NewBitMask(numaNodes...)
 		bestHint = &TopologyHint{defaultAffinity, false}
 	}
 

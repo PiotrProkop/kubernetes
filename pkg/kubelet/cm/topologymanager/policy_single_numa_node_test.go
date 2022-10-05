@@ -33,10 +33,10 @@ func TestPolicySingleNumaNodeCanAdmitPodResult(t *testing.T) {
 			expected: false,
 		},
 	}
+	topo := commonNUMATopologyTwoNodes()
 
 	for _, tc := range tcases {
-		numaNodes := []int{0, 1}
-		policy := NewSingleNumaNodePolicy(numaNodes)
+		policy := NewSingleNumaNodePolicy(topo)
 		result := policy.(*singleNumaNodePolicy).canAdmitPodResult(&tc.hint)
 
 		if result != tc.expected {
@@ -156,11 +156,11 @@ func TestPolicySingleNumaNodeFilterHints(t *testing.T) {
 }
 
 func TestPolicySingleNumaNodeMerge(t *testing.T) {
-	numaNodes := []int{0, 1, 2, 3}
-	policy := NewSingleNumaNodePolicy(numaNodes)
+	topo := commonNUMATopologyFourNodes()
+	policy := NewSingleNumaNodePolicy(topo)
 
-	tcases := commonPolicyMergeTestCases(numaNodes)
-	tcases = append(tcases, policy.(*singleNumaNodePolicy).mergeTestCases(numaNodes)...)
+	tcases := commonPolicyMergeTestCases(topo.GetNumaNodes())
+	tcases = append(tcases, policy.(*singleNumaNodePolicy).mergeTestCases(topo.GetNumaNodes())...)
 
 	testPolicyMerge(policy, tcases, t)
 }

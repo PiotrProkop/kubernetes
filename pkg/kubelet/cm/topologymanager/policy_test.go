@@ -20,8 +20,11 @@ import (
 	"reflect"
 	"testing"
 
-	"k8s.io/api/core/v1"
+	cadvisorapi "github.com/google/cadvisor/info/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/bitmask"
+	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/numatopology"
+	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/numatopology/fakesysfs"
 )
 
 type policyMergeTestCase struct {
@@ -748,6 +751,11 @@ func (p *bestEffortPolicy) mergeTestCases(numaNodes []int) []policyMergeTestCase
 				Preferred:        false,
 			},
 		},
+	}
+}
+
+func (p *bestEffortPolicy) mergeTestCasesNoPolicies(numaNodes []int) []policyMergeTestCase {
+	return []policyMergeTestCase{
 		{
 			name: "bestNonPreferredAffinityCount (5)",
 			hp: []HintProvider{
@@ -827,6 +835,167 @@ func (p *bestEffortPolicy) mergeTestCases(numaNodes []int) []policyMergeTestCase
 			},
 			expected: TopologyHint{
 				NUMANodeAffinity: NewTestBitMask(1, 2),
+				Preferred:        false,
+			},
+		},
+	}
+}
+
+func (p *bestEffortPolicy) mergeTestCasesClosestNUMA(numaNodes []int) []policyMergeTestCase {
+	return []policyMergeTestCase{
+		{
+			name: "Two providers, 2 hints each, same mask (some with different bits), same preferred",
+			hp: []HintProvider{
+				&mockHintProvider{
+					map[string][]TopologyHint{
+						"resource1": {
+							{
+								NUMANodeAffinity: NewTestBitMask(0, 4),
+								Preferred:        true,
+							},
+							{
+								NUMANodeAffinity: NewTestBitMask(0, 2),
+								Preferred:        true,
+							},
+						},
+					},
+				},
+				&mockHintProvider{
+					map[string][]TopologyHint{
+						"resource2": {
+							{
+								NUMANodeAffinity: NewTestBitMask(0, 4),
+								Preferred:        true,
+							},
+							{
+								NUMANodeAffinity: NewTestBitMask(0, 2),
+								Preferred:        true,
+							},
+						},
+					},
+				},
+			},
+			expected: TopologyHint{
+				NUMANodeAffinity: NewTestBitMask(0, 2),
+				Preferred:        true,
+			},
+		},
+		{
+			name: "Two providers, 2 hints each, different mask",
+			hp: []HintProvider{
+				&mockHintProvider{
+					map[string][]TopologyHint{
+						"resource1": {
+							{
+								NUMANodeAffinity: NewTestBitMask(4),
+								Preferred:        true,
+							},
+							{
+								NUMANodeAffinity: NewTestBitMask(0, 2),
+								Preferred:        true,
+							},
+						},
+					},
+				},
+				&mockHintProvider{
+					map[string][]TopologyHint{
+						"resource2": {
+							{
+								NUMANodeAffinity: NewTestBitMask(4),
+								Preferred:        true,
+							},
+							{
+								NUMANodeAffinity: NewTestBitMask(0, 2),
+								Preferred:        true,
+							},
+						},
+					},
+				},
+			},
+			expected: TopologyHint{
+				NUMANodeAffinity: NewTestBitMask(4),
+				Preferred:        true,
+			},
+		},
+		{
+			name: "bestNonPreferredAffinityCount (5)",
+			hp: []HintProvider{
+				&mockHintProvider{
+					map[string][]TopologyHint{
+						"resource1": {
+							{
+								NUMANodeAffinity: NewTestBitMask(0, 1, 2, 3),
+								Preferred:        false,
+							},
+							{
+								NUMANodeAffinity: NewTestBitMask(0, 1),
+								Preferred:        false,
+							},
+						},
+					},
+				},
+				&mockHintProvider{
+					map[string][]TopologyHint{
+						"resource2": {
+							{
+								NUMANodeAffinity: NewTestBitMask(1, 2),
+								Preferred:        false,
+							},
+							{
+								NUMANodeAffinity: NewTestBitMask(2, 3),
+								Preferred:        false,
+							},
+						},
+					},
+				},
+			},
+			expected: TopologyHint{
+				NUMANodeAffinity: NewTestBitMask(2, 3),
+				Preferred:        false,
+			},
+		},
+		{
+			name: "bestNonPreferredAffinityCount (6)",
+			hp: []HintProvider{
+				&mockHintProvider{
+					map[string][]TopologyHint{
+						"resource1": {
+							{
+								NUMANodeAffinity: NewTestBitMask(0, 1, 2, 3),
+								Preferred:        false,
+							},
+							{
+								NUMANodeAffinity: NewTestBitMask(0, 1),
+								Preferred:        false,
+							},
+						},
+					},
+				},
+				&mockHintProvider{
+					map[string][]TopologyHint{
+						"resource2": {
+							{
+								NUMANodeAffinity: NewTestBitMask(1, 2, 3),
+								Preferred:        false,
+							},
+							{
+								NUMANodeAffinity: NewTestBitMask(1, 2),
+								Preferred:        false,
+							},
+							{
+								NUMANodeAffinity: NewTestBitMask(1, 3),
+								Preferred:        false,
+							},
+							{
+								NUMANodeAffinity: NewTestBitMask(2, 3),
+								Preferred:        false,
+							},
+						},
+					},
+				},
+			},
+			expected: TopologyHint{
+				NUMANodeAffinity: NewTestBitMask(2, 3),
 				Preferred:        false,
 			},
 		},
@@ -1387,7 +1556,7 @@ func TestCompareHints(t *testing.T) {
 
 	for _, tc := range tcases {
 		t.Run(tc.description, func(t *testing.T) {
-			result := compareHints(tc.bestNonPreferredAffinityCount, tc.current, tc.candidate)
+			result := compareHints(tc.bestNonPreferredAffinityCount, tc.current, tc.candidate, defaultIsCandidateFitterFunc)
 			if result != tc.current && result != tc.candidate {
 				t.Errorf("Expected result to be either 'current' or 'candidate' hint")
 			}
@@ -1399,4 +1568,88 @@ func TestCompareHints(t *testing.T) {
 			}
 		})
 	}
+}
+
+func commonNUMATopologyTwoNodes() numatopology.Topology {
+	nodes := []cadvisorapi.Node{
+		{
+			Id: 0,
+		},
+		{
+			Id: 1,
+		},
+	}
+	fakeSysFs := fakesysfs.FakeSysFs{}
+	fakeSysFs.SetDistances(0, "10 11", nil)
+	fakeSysFs.SetDistances(1, "11 10", nil)
+	topo, _ := numatopology.New(nodes, &fakeSysFs)
+
+	return topo
+}
+
+func commonNUMATopologyFourNodes() numatopology.Topology {
+	nodes := []cadvisorapi.Node{
+		{
+			Id: 0,
+		},
+		{
+			Id: 1,
+		},
+		{
+			Id: 2,
+		},
+		{
+			Id: 3,
+		},
+	}
+	fakeSysFs := fakesysfs.FakeSysFs{}
+	fakeSysFs.SetDistances(0, "10 11 12 12", nil)
+	fakeSysFs.SetDistances(1, "11 10 12 12", nil)
+	fakeSysFs.SetDistances(2, "12 12 10 11", nil)
+	fakeSysFs.SetDistances(3, "12 12 11 10", nil)
+	topo, _ := numatopology.New(nodes, &fakeSysFs)
+
+	return topo
+}
+
+func commonNUMATopologyEightNodes() numatopology.Topology {
+	nodes := []cadvisorapi.Node{
+		{
+			Id: 0,
+		},
+		{
+			Id: 1,
+		},
+		{
+			Id: 2,
+		},
+		{
+			Id: 3,
+		},
+		{
+			Id: 4,
+		},
+		{
+			Id: 5,
+		},
+		{
+			Id: 6,
+		},
+		{
+			Id: 7,
+		},
+	}
+	fakeSysFs := fakesysfs.FakeSysFs{}
+	fakeSysFs.SetDistances(0, "10 11 12 12 30 30 30 30", nil)
+	fakeSysFs.SetDistances(1, "11 10 12 12 30 30 30 30", nil)
+	fakeSysFs.SetDistances(2, "12 12 10 11 30 30 30 30", nil)
+	fakeSysFs.SetDistances(3, "12 12 11 10 30 30 30 30", nil)
+	fakeSysFs.SetDistances(4, "30 30 30 30 10 11 12 12", nil)
+	fakeSysFs.SetDistances(5, "30 30 30 30 11 10 12 12", nil)
+	fakeSysFs.SetDistances(6, "30 30 30 30 12 12 10 11", nil)
+	fakeSysFs.SetDistances(7, "30 30 30 30 12 12 11 10", nil)
+
+	topo, _ := numatopology.New(nodes, &fakeSysFs)
+
+	return topo
 }

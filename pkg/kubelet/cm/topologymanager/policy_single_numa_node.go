@@ -18,11 +18,12 @@ package topologymanager
 
 import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/bitmask"
+	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/numatopology"
 )
 
 type singleNumaNodePolicy struct {
 	//List of NUMA Nodes available on the underlying machine
-	numaNodes []int
+	numaTopology numatopology.Topology
 }
 
 var _ Policy = &singleNumaNodePolicy{}
@@ -31,8 +32,8 @@ var _ Policy = &singleNumaNodePolicy{}
 const PolicySingleNumaNode string = "single-numa-node"
 
 // NewSingleNumaNodePolicy returns single-numa-node policy.
-func NewSingleNumaNodePolicy(numaNodes []int) Policy {
-	return &singleNumaNodePolicy{numaNodes: numaNodes}
+func NewSingleNumaNodePolicy(numaTopology numatopology.Topology) Policy {
+	return &singleNumaNodePolicy{numaTopology: numaTopology}
 }
 
 func (p *singleNumaNodePolicy) Name() string {
@@ -65,9 +66,9 @@ func (p *singleNumaNodePolicy) Merge(providersHints []map[string][]TopologyHint)
 	filteredHints := filterProvidersHints(providersHints)
 	// Filter to only include don't cares and hints with a single NUMA node.
 	singleNumaHints := filterSingleNumaHints(filteredHints)
-	bestHint := mergeFilteredHints(p.numaNodes, singleNumaHints)
+	defaultAffinity, _ := bitmask.NewBitMask(p.numaTopology.GetNumaNodes()...)
+	bestHint := mergeFilteredHints(defaultAffinity, singleNumaHints, nil)
 
-	defaultAffinity, _ := bitmask.NewBitMask(p.numaNodes...)
 	if bestHint.NUMANodeAffinity.IsEqual(defaultAffinity) {
 		bestHint = TopologyHint{nil, bestHint.Preferred}
 	}
